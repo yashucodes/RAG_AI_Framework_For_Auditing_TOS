@@ -4,3 +4,4 @@ __pycache__/
 
 # Ignore the AI's database folder
 faiss_db/
+.venv/

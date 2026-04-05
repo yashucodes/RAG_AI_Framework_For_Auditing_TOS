@@ -3,7 +3,9 @@ from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document # Helps package pasted text!
 from PIL import Image          
-import pytesseract             
+import pytesseract 
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS            
 
 # --- SETUP ROBOT EYES ---
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
@@ -61,6 +63,33 @@ def process_text(raw_text):
 # ==========================================
 # This block ONLY runs if you type `python app.py` in the terminal.
 # It will NOT run when frontend.py calls these functions!
+
+
+# ==========================================
+# 5. THE WALKIE-TALKIE (SEARCH DATABASE)
+# ==========================================
+def search_indian_laws(query_text):
+    print(f"Searching Archive for: '{query_text[:50]}...'")
+    
+    # 1. We must use the exact same AI translator your friend used!
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
+    
+    # 2. Open the door to the FAISS folder
+    # (Note: allow_dangerous_deserialization=True is required by LangChain to load local FAISS files safely!)
+    vector_db = FAISS.load_local(
+        "./faiss_db", 
+        embeddings, 
+        allow_dangerous_deserialization=True 
+    )
+    
+    # 3. Ask FAISS to find the top 3 most relevant law chunks
+    matching_laws = vector_db.similarity_search(query_text, k=3)
+    
+    return matching_laws
+
+
 if __name__ == "__main__":
     print("\n--- Running Local Test ---")
     try:
