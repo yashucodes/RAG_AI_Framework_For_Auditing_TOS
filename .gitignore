@@ -1,2 +1,6 @@
-*
-.
+# Ignore the virtual environment
+venv/
+__pycache__/
+
+# Ignore the AI's database folder
+faiss_db/
