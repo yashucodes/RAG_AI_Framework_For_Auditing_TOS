@@ -1,19 +1,32 @@
+# app.py
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
-# 1. Load the PDF
-print("Reading the PDF...")
-loader = PyPDFLoader("sample.pdf")
-pages = loader.load()
+def main():
+    print("🧠 1. Waking up the AI Brain (Loading The Reference)...")
 
-# 2. Chunking (Splitting the text into small pieces)
-print("Chopping text into bite-sized chunks...")
-text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000, 
-    chunk_overlap=100
-)
-chunks = text_splitter.split_documents(pages)
+    # Load the same embeddings model
+    embeddings = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
+    )
 
-# 3. Final Success Message
-print(f"DONE! I read {len(pages)} pages and chopped them into {len(chunks)} small chunks.")
-# 2. Show the result
+    # Load the FAISS database we built
+    vector_db = FAISS.load_local(
+        "./faiss_db",        # ← matches document_processor.py
+        embeddings,
+        allow_dangerous_deserialization=True
+    )
+    print("✅ Indian Laws successfully loaded from memory!")
+
+    print("\n📄 2. Loading the ToS (The Target)...")
+    # Change "sample.pdf" to your ToS PDF name
+    loader = PyPDFLoader("sample.pdf")
+    tos_pages = loader.load()
+    print(f"✅ Successfully read {len(tos_pages)} pages of the Terms of Service.")
+
+    print("\n🚀 Both Target and Reference are ready for auditing!")
+    
+
+if __name__ == "__main__":
+    main()
