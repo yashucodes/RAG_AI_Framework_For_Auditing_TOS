@@ -68,25 +68,63 @@ def process_text(raw_text):
 # ==========================================
 # 5. THE WALKIE-TALKIE (SEARCH DATABASE)
 # ==========================================
+from sentence_transformers import CrossEncoder
+
+# Load once at module level so it doesn't reload on every search call
+reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+
+# --- TUNE THESE TWO NUMBERS AFTER TESTING ---
+FAISS_DISTANCE_THRESHOLD = 1.5   # lower = stricter. FAISS L2 distance: lower = more similar
+CROSSENCODER_SCORE_THRESHOLD = -2.0  # higher = stricter. Typical range: -10 to +10
+
+
 def search_indian_laws(query_text):
     print(f"Searching Archive for: '{query_text[:50]}...'")
-    
-    # 1. We must use the exact same AI translator your friend used!
+
     embeddings = HuggingFaceEmbeddings(
         model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
-    
-    # 2. Open the door to the FAISS folder
-    # (Note: allow_dangerous_deserialization=True is required by LangChain to load local FAISS files safely!)
+
     vector_db = FAISS.load_local(
-        "./faiss_db", 
-        embeddings, 
-        allow_dangerous_deserialization=True 
+        "./faiss_db",
+        embeddings,
+        allow_dangerous_deserialization=True
     )
-    
-    # 3. Ask FAISS to find the top 3 most relevant law chunks
-    matching_laws = vector_db.similarity_search(query_text, k=3)
-    
+
+    # STAGE 1: Bi-encoder retrieval (fast, rough)
+    # similarity_search_with_score returns (doc, distance) — lower distance = closer match
+    candidates = vector_db.similarity_search_with_score(query_text, k=10)
+
+    # Filter out anything too far away before we even bother reranking
+    filtered_candidates = [
+        (doc, score) for doc, score in candidates
+        if score <= FAISS_DISTANCE_THRESHOLD
+    ]
+
+    if not filtered_candidates:
+        print("No candidates passed the FAISS distance threshold.")
+        return []
+
+    # STAGE 2: Cross-encoder reranking (slow, accurate)
+    pairs = [(query_text, doc.page_content) for doc, _ in filtered_candidates]
+    rerank_scores = reranker.predict(pairs)
+
+    # Attach cross-encoder scores and filter again
+    scored_results = [
+        (doc, ce_score)
+        for (doc, _), ce_score in zip(filtered_candidates, rerank_scores)
+        if ce_score >= CROSSENCODER_SCORE_THRESHOLD
+    ]
+
+    # Sort by cross-encoder score, best first
+    scored_results.sort(key=lambda x: x[1], reverse=True)
+
+    if not scored_results:
+        print("No candidates passed the cross-encoder relevance check.")
+        return []
+
+    # Return top 3 relevant laws (just the documents, matching your original return type)
+    matching_laws = [doc for doc, score in scored_results[:3]]
     return matching_laws
 
 
