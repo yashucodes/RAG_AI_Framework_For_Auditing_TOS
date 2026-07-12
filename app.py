@@ -1,4 +1,6 @@
 # app.py (The Kitchen / Backend)
+import os
+from fastapi import FastAPI, UploadFile, File, Form
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document # Helps package pasted text!
@@ -6,133 +8,122 @@ from PIL import Image
 import pytesseract 
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS            
+from sentence_transformers import CrossEncoder
 
 # --- SETUP ROBOT EYES ---
 pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-
-# ==========================================
-# 1. PDF RECIPE
-# ==========================================
-def process_pdf(file_path):
-    print(f"Reading the PDF from {file_path}...")
-    loader = PyPDFLoader(file_path)
-    pages = loader.load()
-    
-    print("Chopping text into bite-sized chunks...")
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    chunks = text_splitter.split_documents(pages)
-    
-    # Brought over from your old code!
-    print(f"DONE! I read {len(pages)} pages and chopped them into {len(chunks)} small chunks.")
-    return chunks
-
-# ==========================================
-# 2. IMAGE RECIPE
-# ==========================================
-def process_image(file_path):
-    print(f"Opening image from {file_path}...")
-    my_picture = Image.open(file_path)
-    return pytesseract.image_to_string(my_picture)
-
-# ==========================================
-# 3. WORD DOC RECIPE
-# ==========================================
-def process_docx(file_path):
-    print(f"Reading Word Doc from {file_path}...")
-    loader = Docx2txtLoader(file_path)
-    pages = loader.load()
-    
-    print("Chopping text into bite-sized chunks...")
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    chunks = text_splitter.split_documents(pages)
-    return chunks
-
-# ==========================================
-# 4. PASTED TEXT RECIPE
-# ==========================================
-def process_text(raw_text):
-    print("Reading pasted text...")
-    # We have to wrap raw text in a "Document" so LangChain knows how to chop it
-    doc = [Document(page_content=raw_text)]
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    return text_splitter.split_documents(doc)
-
-
-# ==========================================
-# LOCAL TESTING (Brought over from old code)
-# ==========================================
-# This block ONLY runs if you type `python app.py` in the terminal.
-# It will NOT run when frontend.py calls these functions!
-
-
-# ==========================================
-# 5. THE WALKIE-TALKIE (SEARCH DATABASE)
-# ==========================================
-from sentence_transformers import CrossEncoder
 
 # Load once at module level so it doesn't reload on every search call
 reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
 # --- TUNE THESE TWO NUMBERS AFTER TESTING ---
-FAISS_DISTANCE_THRESHOLD = 1.5   # lower = stricter. FAISS L2 distance: lower = more similar
-CROSSENCODER_SCORE_THRESHOLD = -2.0  # higher = stricter. Typical range: -10 to +10
+FAISS_DISTANCE_THRESHOLD = 1.4  # lower = stricter. FAISS L2 distance: lower = more similar
+CROSSENCODER_SCORE_THRESHOLD = -7.0  # higher = stricter. Typical range: -10 to +10
 
+# ==========================================
+# RECIPES (Chop the food)
+# ==========================================
+def process_pdf(file_path):
+    loader = PyPDFLoader(file_path)
+    pages = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    return text_splitter.split_documents(pages)
 
+def process_image(file_path):
+    my_picture = Image.open(file_path)
+    raw_text = pytesseract.image_to_string(my_picture)
+    
+    # FIX: We wrapped the text in a Document and gave it the knife!
+    doc = [Document(page_content=raw_text)]
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    return text_splitter.split_documents(doc)
+
+def process_docx(file_path):
+    loader = Docx2txtLoader(file_path)
+    pages = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    return text_splitter.split_documents(pages)
+
+def process_text(raw_text):
+    doc = [Document(page_content=raw_text)]
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    return text_splitter.split_documents(doc)
+
+# ==========================================
+# THE WALKIE-TALKIE (SEARCH DATABASE)
+# ==========================================
 def search_indian_laws(query_text):
-    print(f"Searching Archive for: '{query_text[:50]}...'")
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    vector_db = FAISS.load_local("./faiss_db", embeddings, allow_dangerous_deserialization=True)
 
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-
-    vector_db = FAISS.load_local(
-        "./faiss_db",
-        embeddings,
-        allow_dangerous_deserialization=True
-    )
-
-    # STAGE 1: Bi-encoder retrieval (fast, rough)
-    # similarity_search_with_score returns (doc, distance) — lower distance = closer match
     candidates = vector_db.similarity_search_with_score(query_text, k=10)
-
-    # Filter out anything too far away before we even bother reranking
-    filtered_candidates = [
-        (doc, score) for doc, score in candidates
-        if score <= FAISS_DISTANCE_THRESHOLD
-    ]
+    filtered_candidates = [(doc, score) for doc, score in candidates if score <= FAISS_DISTANCE_THRESHOLD]
 
     if not filtered_candidates:
-        print("No candidates passed the FAISS distance threshold.")
         return []
 
-    # STAGE 2: Cross-encoder reranking (slow, accurate)
     pairs = [(query_text, doc.page_content) for doc, _ in filtered_candidates]
     rerank_scores = reranker.predict(pairs)
 
-    # Attach cross-encoder scores and filter again
     scored_results = [
-        (doc, ce_score)
-        for (doc, _), ce_score in zip(filtered_candidates, rerank_scores)
+        (doc, ce_score) for (doc, _), ce_score in zip(filtered_candidates, rerank_scores)
         if ce_score >= CROSSENCODER_SCORE_THRESHOLD
     ]
-
-    # Sort by cross-encoder score, best first
     scored_results.sort(key=lambda x: x[1], reverse=True)
 
     if not scored_results:
-        print("No candidates passed the cross-encoder relevance check.")
         return []
 
-    # Return top 3 relevant laws (just the documents, matching your original return type)
-    matching_laws = [doc for doc, score in scored_results[:3]]
-    return matching_laws
+    return [doc for doc, score in scored_results[:3]]
 
+# ==========================================
+# THE DRIVE-THRU WINDOWS (FastAPI)
+# ==========================================
+app = FastAPI(title="ToS Auditor Kitchen")
 
-if __name__ == "__main__":
-    print("\n--- Running Local Test ---")
-    try:
-        # Testing your old sample.pdf exactly how you had it!
-        test_chunks = process_pdf("sample.pdf")
-        print("Success! The app.py backend is working perfectly on its own.")
-    except Exception as e:
-        print(f"Could not test sample.pdf. Make sure the file exists! Error: {e}")
+@app.get("/")
+def check_kitchen_status():
+    return {"message": "Hello! The Kitchen Drive-Thru is OPEN!"}
+
+# Window 1: For Pasted Text
+@app.post("/audit-text/")
+def audit_pasted_text(raw_text: str = Form(...)):
+    chunks = process_text(raw_text)
+    matching_laws = search_indian_laws(chunks[0].page_content)
+    
+    # We send the answers out the window in a neat little dictionary box
+    return {
+        "chunks_count": len(chunks),
+        "matched_laws": [law.page_content for law in matching_laws]
+    }
+# Window 2: For Uploaded Files (PDFs, Images, Word Docs)
+@app.post("/audit-file/")
+def audit_uploaded_file(file: UploadFile = File(...)):
+    print(f"Drive-Thru received a file: {file.filename}")
+    
+    # 1. Put the file on the counter (save it temporarily)
+    temp_filepath = f"temp_uploads/{file.filename}"
+    with open(temp_filepath, "wb") as f:
+        f.write(file.file.read())
+    
+    # 2. Look at the file and use the right recipe!
+    if file.filename.lower().endswith(".pdf"):
+        chunks = process_pdf(temp_filepath)
+    elif file.filename.lower().endswith((".png", ".jpg", ".jpeg")):
+        chunks = process_image(temp_filepath)
+    elif file.filename.lower().endswith(".docx"):
+        chunks = process_docx(temp_filepath)
+    else:
+        return {"error": "Sorry, we don't cook this type of file!"}
+        
+    # 3. Clean up the counter (delete the temp file)
+    os.remove(temp_filepath)
+    
+    # 4. Use the Walkie-Talkie to get the laws
+    matching_laws = search_indian_laws(chunks[0].page_content)
+    
+    # 5. Slide the meal back out the window!
+    return {
+        "chunks_count": len(chunks),
+        "matched_laws": [law.page_content for law in matching_laws]
+    }

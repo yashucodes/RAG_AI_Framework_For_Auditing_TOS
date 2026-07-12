@@ -1,15 +1,12 @@
 # frontend.py
 import streamlit as st
-import os
-from app import process_pdf, process_image, process_docx, process_text, search_indian_laws
+import requests
 
 st.set_page_config(page_title="ToS Auditor", page_icon="⚖️")
 st.title("⚖️ Legal ToS Auditor")
 
-UPLOAD_FOLDER = "temp_uploads"
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-
+# The URL address of our FastAPI backend window
+BACKEND_URL = "http://127.0.0.1:8000"
 
 def display_results(matching_laws):
     """Shows the top matching law, or a clear message if nothing relevant was found."""
@@ -17,8 +14,8 @@ def display_results(matching_laws):
         st.warning("⚠️ No relevant legal provision found for this text.")
     else:
         st.write("**Most relevant law found:**")
-        st.info(matching_laws[0].page_content)
-
+        # FastAPI returns a list of simple strings now, so no need for .page_content here!
+        st.info(matching_laws[0])
 
 tab1, tab2 = st.tabs(["📁 Upload Document", "📝 Paste Text"])
 
@@ -37,28 +34,27 @@ with tab1:
 
         if st.button("Start Audit on Files"):
             for uploaded_file in uploaded_files:
-                st.write(f"**Processing:** {uploaded_file.name}")
-
-                temp_filepath = os.path.join(UPLOAD_FOLDER, uploaded_file.name)
-                with open(temp_filepath, "wb") as f:
-                    f.write(uploaded_file.read())
-
-                text_to_search = ""
-                name_lower = uploaded_file.name.lower()
-
-                if name_lower.endswith(".pdf"):
-                    chopped_chunks = process_pdf(temp_filepath)
-                    text_to_search = chopped_chunks[0].page_content
-
-                elif name_lower.endswith((".png", ".jpg", ".jpeg")):
-                    text_to_search = process_image(temp_filepath)
-
-                elif name_lower.endswith(".docx"):
-                    chopped_chunks = process_docx(temp_filepath)
-                    text_to_search = chopped_chunks[0].page_content
-
-                matching_laws = search_indian_laws(text_to_search)
-                display_results(matching_laws)
+                st.write(f"**Processing:** {uploaded_file.name} via Backend...")
+                
+                # Package the file to send over the web to the FastAPI Drive-Thru
+                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                
+                try:
+                    # Send it to Window 2!
+                    response = requests.post(f"{BACKEND_URL}/audit-file/", files=files)
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if "error" in result:
+                            st.error(result["error"])
+                        else:
+                            st.success(f"👨‍🍳 Backend chopped file into {result['chunks_count']} pieces!")
+                            display_results(result.get("matched_laws", []))
+                    else:
+                        st.error(f"Oops! The backend encountered an error. Status code: {response.status_code}")
+                        
+                except requests.exceptions.ConnectionError:
+                    st.error("🚨 Could not connect to backend. Is the Uvicorn server running?")
 
 # ==========================================
 # TAB 2: PASTE TEXT
@@ -68,6 +64,21 @@ with tab2:
 
     if pasted_text:
         if st.button("Start Audit on Pasted Text"):
-            chopped_chunks = process_text(pasted_text)
-            matching_laws = search_indian_laws(chopped_chunks[0].page_content)
-            display_results(matching_laws)
+            st.write("Sending text to Backend...")
+            
+            # Package the text data
+            data = {"raw_text": pasted_text}
+            
+            try:
+                # Send it to Window 1!
+                response = requests.post(f"{BACKEND_URL}/audit-text/", data=data)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    st.success(f"👨‍🍳 Backend chopped pasted text into {result['chunks_count']} pieces!")
+                    display_results(result.get("matched_laws", []))
+                else:
+                    st.error(f"Oops! The backend encountered an error. Status code: {response.status_code}")
+                    
+            except requests.exceptions.ConnectionError:
+                st.error("🚨 Could not connect to backend. Is the Uvicorn server running?")
