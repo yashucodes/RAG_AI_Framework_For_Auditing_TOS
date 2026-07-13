@@ -75,10 +75,9 @@ def _call_gemini_json(prompt, schema):
 pytesseract.pytesseract.tesseract_cmd = r'C:\Tesseract-OCR\tesseract.exe'
 
 # ==========================================
-# 1. PDF RECIPE
+# RECIPES (Chop the food)
 # ==========================================
 def process_pdf(file_path):
-    print(f"Reading the PDF from {file_path}...")
     loader = PyPDFLoader(file_path)
     pages = loader.load()
 
@@ -93,26 +92,22 @@ def process_pdf(file_path):
 # 2. IMAGE RECIPE
 # ==========================================
 def process_image(file_path):
-    print(f"Opening image from {file_path}...")
     my_picture = Image.open(file_path)
-    return pytesseract.image_to_string(my_picture)
+    raw_text = pytesseract.image_to_string(my_picture)
+    
+    # FIX: We wrapped the text in a Document and gave it the knife!
+    doc = [Document(page_content=raw_text)]
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+    return text_splitter.split_documents(doc)
 
-# ==========================================
-# 3. WORD DOC RECIPE
-# ==========================================
 def process_docx(file_path):
-    print(f"Reading Word Doc from {file_path}...")
     loader = Docx2txtLoader(file_path)
     pages = loader.load()
 
     print("Chopping text into bite-sized chunks...")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    chunks = text_splitter.split_documents(pages)
-    return chunks
+    return text_splitter.split_documents(pages)
 
-# ==========================================
-# 4. PASTED TEXT RECIPE
-# ==========================================
 def process_text(raw_text):
     print("Reading pasted text...")
     doc = [Document(page_content=raw_text)]
