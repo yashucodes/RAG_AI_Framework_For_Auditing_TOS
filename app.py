@@ -16,19 +16,9 @@ from google.genai import types
 
 load_dotenv()
 
-# Gemini client for risk classification, contradiction detection, and
-# law-relevance judging. gemini-2.5-flash has a free tier (no billing
-# required) as of this writing.
 import time
 from google.genai import errors as genai_errors
 
-# Gemini client for risk classification, contradiction detection, and
-# law-relevance judging. The free tier allows a limited number of
-# requests per minute -- a single audit_text() call on a real document
-# can easily need more calls than that (one classify_risk call per
-# clause, plus one search_indian_laws call per flagged clause, plus one
-# find_contradictions call for the whole document), so _call_gemini_json
-# retries with a wait instead of crashing when the free-tier limit is hit.
 gemini_client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 GEMINI_MODEL = "gemini-flash-lite-latest"
 
@@ -38,16 +28,8 @@ MAX_RATE_LIMIT_RETRIES = 5
 
 def _call_gemini_json(prompt, schema):
     """
-    Calls Gemini with a prompt and a JSON schema (plain dict, using
-    JSON Schema types), and returns the parsed JSON response. Using
-    response_schema instead of asking the model to "output JSON" in the
-    prompt text guarantees the response is valid, parseable JSON that
-    matches the given shape -- no fragile regex/markdown-fence stripping
-    needed.
-
-    Automatically waits and retries if the free-tier per-minute request
-    limit is hit (a 429 RESOURCE_EXHAUSTED error), instead of letting
-    the whole audit crash partway through a document.
+    Calls Gemini with a prompt and a JSON schema and returns the parsed
+    JSON response. Automatically retries on free-tier rate limit errors.
     """
     for attempt in range(MAX_RATE_LIMIT_RETRIES):
         try:
@@ -71,8 +53,10 @@ def _call_gemini_json(prompt, schema):
                 continue
             raise
 
+
 # --- SETUP ROBOT EYES ---
 pytesseract.pytesseract.tesseract_cmd = r'C:\Tesseract-OCR\tesseract.exe'
+
 
 # ==========================================
 # RECIPES (Chop the food)
@@ -88,17 +72,25 @@ def process_pdf(file_path):
     print(f"DONE! I read {len(pages)} pages and chopped them into {len(chunks)} small chunks.")
     return chunks
 
+
 # ==========================================
 # 2. IMAGE RECIPE
 # ==========================================
 def process_image(file_path):
+    """
+    Extracts text from an image using OCR and returns it as a plain
+    string — the same format that process_pdf() and process_docx()
+    produce after going through _extract_text_from_chunks().
+
+    FIX: Previously this returned a list of Document chunks, which caused
+    an AttributeError when summarize_document() called .strip() on it.
+    Now it returns a plain string directly so all three file types
+    (PDF, DOCX, image) produce the same output type for the audit pipeline.
+    """
     my_picture = Image.open(file_path)
     raw_text = pytesseract.image_to_string(my_picture)
-    
-    # FIX: We wrapped the text in a Document and gave it the knife!
-    doc = [Document(page_content=raw_text)]
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
-    return text_splitter.split_documents(doc)
+    return raw_text  # ✅ plain string — consistent with PDF/DOCX after extraction
+
 
 def process_docx(file_path):
     loader = Docx2txtLoader(file_path)
@@ -108,28 +100,19 @@ def process_docx(file_path):
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     return text_splitter.split_documents(pages)
 
+
 def process_text(raw_text):
     print("Reading pasted text...")
     doc = [Document(page_content=raw_text)]
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
     return text_splitter.split_documents(doc)
 
+
 # ==========================================
 # 5. THE WALKIE-TALKIE (SEARCH DATABASE)
 # ==========================================
-# Embedding model used to build/query the FAISS law corpus. This is
-# unrelated to Gemini -- FAISS retrieval (the "RAG" part) is unchanged.
-# It's still needed here because search_indian_laws() has to load the
-# FAISS index with the SAME embedding model it was built with.
 law_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# How many candidate law excerpts FAISS retrieves before handing them to
-# Gemini to judge. No distance threshold is applied here -- rather than
-# hand-tuning a FAISS_DISTANCE_THRESHOLD cutoff (as before), Gemini reads
-# the top-k candidates directly and decides which, if any, are genuinely
-# relevant. This moves the judgment call from a hand-calibrated numeric
-# threshold to the LLM, while the retrieval step (FAISS/embeddings)
-# itself is untouched.
 LAW_CANDIDATES_K = 5
 
 _LAW_RELEVANCE_SCHEMA = {
@@ -141,6 +124,7 @@ _LAW_RELEVANCE_SCHEMA = {
     },
     "required": ["relevant", "reasoning"],
 }
+
 
 def search_indian_laws(query_text):
     print(f"Searching Archive for: '{query_text[:50]}...'")
@@ -198,12 +182,12 @@ better than a weak, unconfident match."""
 
 
 def format_citation(doc):
-    """Builds a clean, human-readable citation from a law document's metadata
-    instead of showing a raw, un-punctuated slice of the PDF text."""
+    """Builds a clean, human-readable citation from a law document's metadata."""
     source = doc.metadata.get("source", "Unknown source")
     filename = os.path.splitext(os.path.basename(source))[0]
     display_name = filename.replace("_", " ").replace("-", " ").strip()
     return display_name
+
 
 # ==========================================
 # 6. CLAUSE SPLITTER
@@ -227,6 +211,7 @@ def split_into_clauses(raw_text):
         return paragraph_split
 
     return [text]
+
 
 # ==========================================
 # 7. SEMANTIC RISK DETECTION (Gemini LLM-based)
@@ -286,14 +271,7 @@ Respond with:
 
 def classify_risk(clause_text):
     """
-    Returns (risk_category, confidence, reason, excerpt). Sends the
-    clause to Gemini with a fixed set of categories and asks for the
-    best-fitting one, PLUS the specific sentence(s) that caused that
-    verdict -- so callers can show the user the actual problem text
-    instead of the entire (possibly very long) clause. Handles
-    negation/protective phrasing natively as part of the model's
-    understanding of the clause, rather than needing a separate
-    SAFE_EXEMPLARS list or negation word list to patch around it.
+    Returns (risk_category, confidence, reason, excerpt).
     """
     text = re.sub(r'^\d+\.\s+[A-Z][A-Z \-&]*\n', '', clause_text.strip())
     prompt = _RISK_CLASSIFICATION_PROMPT.format(clause=text)
@@ -304,6 +282,7 @@ def classify_risk(clause_text):
         result.get("reason", ""),
         result.get("excerpt", ""),
     )
+
 
 # ==========================================
 # 8. CONTRADICTION DETECTION (Gemini LLM-based)
@@ -329,17 +308,12 @@ _CONTRADICTION_SCHEMA = {
     "required": ["contradictions"],
 }
 
+
 def find_contradictions(clauses):
     """
-    Sends the full numbered list of clauses to Gemini in a single call
-    and asks it to identify pairs that genuinely contradict each other --
-    i.e. one clause promises or grants the user something, and another
-    clause elsewhere quietly undercuts or reverses that same promise.
-    Returns a list of (clause_num_a, clause_num_b, excerpt_a, excerpt_b,
-    explanation) tuples -- the 1-based clause numbers so callers can point
-    the user to exactly where each side lives, plus short quoted snippets
-    from each side and Gemini's specific reasoning, not the full (possibly
-    very long) clause text.
+    Sends the full numbered list of clauses to Gemini and returns
+    contradiction pairs as (clause_num_a, clause_num_b, excerpt_a,
+    excerpt_b, explanation) tuples.
     """
     if len(clauses) < 2:
         return []
@@ -379,10 +353,10 @@ specific conflicting text, not the whole clause or a summary."""
             excerpt_a = pair.get("excerpt_a") or clauses[i]
             excerpt_b = pair.get("excerpt_b") or clauses[j]
             explanation = pair.get("explanation", "These two clauses appear to conflict with each other.")
-            # i+1 / j+1: convert back to the 1-based clause numbers shown to the user
             contradictions.append((i + 1, j + 1, excerpt_a, excerpt_b, explanation))
 
     return contradictions
+
 
 # ==========================================
 # 8.5. DOCUMENT SUMMARY (Gemini LLM-based)
@@ -399,26 +373,25 @@ _SUMMARY_SCHEMA = {
     "required": ["summary", "overall_risk"],
 }
 
+
 def summarize_document(raw_text):
     """
-    Gives the user a short, plain-language TL;DR of the uploaded ToS
-    document before they read the detailed clause-by-clause findings --
-    what service it's for, and a quick read on how consumer-friendly it
-    is overall. This is a single lightweight Gemini call over the whole
-    document text, separate from (and in addition to) the per-clause
-    classify_risk() pass.
-
     Returns (summary_text, overall_risk) where overall_risk is one of
-    "low", "medium", "high". Falls back to a generic message if the
-    document is empty or the call fails, rather than raising -- a
-    missing summary shouldn't block the rest of the audit.
+    "low", "medium", "high". Falls back gracefully if the call fails.
     """
+    # FIX: guard against raw_text being a list instead of a string.
+    # This can happen if a caller passes process_image() output directly
+    # without going through _extract_text_from_chunks() first.
+    if isinstance(raw_text, list):
+        raw_text = " ".join(
+            c.page_content if hasattr(c, "page_content") else str(c)
+            for c in raw_text
+        )
+
     text = raw_text.strip()
     if not text:
         return "No readable text was found in this document.", "low"
 
-    # Cap the input so a very long ToS doesn't blow past prompt limits --
-    # a summary only needs the gist, not the entire document verbatim.
     excerpt = text[:6000]
 
     prompt = f"""You are a legal analyst giving a everyday user a quick, plain-language
@@ -446,23 +419,27 @@ consumer-unfriendly the document reads as a whole."""
         print(f"summarize_document failed: {e}")
         return "Summary unavailable for this document.", "medium"
 
+
 # ==========================================
 # 9. FULL AUDIT PIPELINE
 # ==========================================
 def audit_text(raw_text):
     """
-    Takes raw pasted (or extracted) ToS text and returns a list of finding
-    dicts ready for frontend.py's display_audit_results().
+    Takes raw pasted (or extracted) ToS text and returns a list of
+    finding dicts ready for frontend.py's display_audit_results().
     """
+    # FIX: same list guard as summarize_document — if a list of chunks
+    # is passed in, stitch them into a single string first.
+    if isinstance(raw_text, list):
+        raw_text = " ".join(
+            c.page_content if hasattr(c, "page_content") else str(c)
+            for c in raw_text
+        )
+
     clauses = split_into_clauses(raw_text)
     findings = []
 
     # --- Pass 1: per-clause semantic risk check ---
-    # A clause is only reported as a finding if BOTH (a) it reads as risky
-    # AND (b) a real matching law section was actually found for it. If no
-    # law match exists, the clause is NOT flagged — the AI's risk guess
-    # alone is not treated as proof of a violation without a citation to
-    # back it up.
     for clause_number, clause in enumerate(clauses, start=1):
         risk_category, score, reason, excerpt = classify_risk(clause)
         if risk_category != "compliant":
@@ -501,14 +478,6 @@ def audit_text(raw_text):
 # ==========================================
 # 10. THE DRIVE-THRU WINDOWS (FastAPI)
 # ==========================================
-# This exposes the same Gemini-based pipeline above (split_into_clauses,
-# classify_risk, search_indian_laws, find_contradictions, audit_text,
-# summarize_document) over HTTP, in addition to frontend.py being able
-# to import and call these functions directly. Nothing about the
-# Gemini-based logic itself changes here -- this is purely an
-# additional access layer, mirroring the original FastAPI drive-thru
-# endpoints but wired to the current backend instead of the old
-# CrossEncoder-only search.
 app = FastAPI(title="ToS Auditor Kitchen")
 
 UPLOAD_FOLDER = "temp_uploads"
@@ -522,9 +491,7 @@ def check_kitchen_status():
 
 
 def _extract_text_from_chunks(chunks):
-    """process_pdf/process_docx return a list of split Document chunks --
-    this stitches them back into one block of text for the audit
-    pipeline, which expects raw text (it does its own clause splitting)."""
+    """Stitches a list of Document chunks back into one plain string."""
     return " ".join(c.page_content for c in chunks)
 
 
@@ -545,32 +512,28 @@ def audit_pasted_text(raw_text: str = Form(...)):
 def audit_uploaded_file(file: UploadFile = File(...)):
     print(f"Drive-Thru received a file: {file.filename}")
 
-    # 1. Put the file on the counter (save it temporarily)
     temp_filepath = os.path.join(UPLOAD_FOLDER, file.filename)
     with open(temp_filepath, "wb") as f:
         f.write(file.file.read())
 
-    # 2. Look at the file and use the right recipe!
     name_lower = file.filename.lower()
     if name_lower.endswith(".pdf"):
         text_to_audit = _extract_text_from_chunks(process_pdf(temp_filepath))
     elif name_lower.endswith((".png", ".jpg", ".jpeg")):
-        text_to_audit = process_image(temp_filepath)
+        # FIX: process_image() now returns a plain string directly,
+        # so no _extract_text_from_chunks() call is needed here.
+        text_to_audit = process_image(temp_filepath)  # ✅ already a string
     elif name_lower.endswith(".docx"):
         text_to_audit = _extract_text_from_chunks(process_docx(temp_filepath))
     else:
         os.remove(temp_filepath)
         return {"error": "Sorry, we don't cook this type of file!"}
 
-    # 3. Clean up the counter (delete the temp file)
     os.remove(temp_filepath)
 
-    # 4. Run the full Gemini-based audit pipeline (summary + risk +
-    # contradiction findings, each backed by a real law citation)
     summary_text, overall_risk = summarize_document(text_to_audit)
     findings = audit_text(text_to_audit)
 
-    # 5. Slide the meal back out the window!
     return {
         "summary": summary_text,
         "overall_risk": overall_risk,
