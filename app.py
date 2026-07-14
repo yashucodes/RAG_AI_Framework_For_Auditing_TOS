@@ -9,6 +9,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from PIL import Image
 import pytesseract
+import shutil
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from google import genai
@@ -55,7 +56,37 @@ def _call_gemini_json(prompt, schema):
 
 
 # --- SETUP ROBOT EYES ---
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+def _locate_tesseract():
+    # Allow user to override with env vars set by deployment or local dev.
+    env_checks = [os.environ.get("TESSERACT_CMD"), os.environ.get("TESSERACT_PATH")]
+    for p in env_checks:
+        if p and os.path.exists(p):
+            return p
+
+    # If tesseract is on PATH, shutil.which will find it.
+    which = shutil.which("tesseract")
+    if which:
+        return which
+
+    # Common Windows install locations
+    common = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\Tesseract-OCR\tesseract.exe",
+    ]
+    for p in common:
+        if os.path.exists(p):
+            return p
+
+    return None
+
+
+_TESSERACT_CMD = _locate_tesseract()
+if _TESSERACT_CMD:
+    pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
+else:
+    # Do not set tesseract_cmd; let callers handle the missing binary.
+    print("WARNING: tesseract executable not found. OCR will fail for images unless Tesseract is installed and on PATH.")
 
 
 # ==========================================
@@ -88,8 +119,14 @@ def process_image(file_path):
     (PDF, DOCX, image) produce the same output type for the audit pipeline.
     """
     my_picture = Image.open(file_path)
-    raw_text = pytesseract.image_to_string(my_picture)
-    return raw_text  # ✅ plain string — consistent with PDF/DOCX after extraction
+    try:
+        raw_text = pytesseract.image_to_string(my_picture)
+        return raw_text  # ✅ plain string — consistent with PDF/DOCX after extraction
+    except pytesseract.pytesseract.TesseractNotFoundError:
+        raise RuntimeError(
+            "Tesseract OCR executable not found. Install Tesseract (https://github.com/tesseract-ocr/tesseract) "
+            "and ensure it's on your PATH, or set the TESSERACT_CMD/TESSERACT_PATH environment variable to the tesseract.exe location."
+        )
 
 
 def process_docx(file_path):
@@ -111,25 +148,40 @@ def process_text(raw_text):
 # ==========================================
 # 5. THE WALKIE-TALKIE (SEARCH DATABASE)
 # ==========================================
-from sentence_transformers import CrossEncoder
+law_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
 
-# Load once at module level so it doesn't reload on every search call
-reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+LAW_CANDIDATES_K = 5
 
-# --- TUNE THESE TWO NUMBERS AFTER TESTING ---
-FAISS_DISTANCE_THRESHOLD = 1.5   # lower = stricter. FAISS L2 distance: lower = more similar
-CROSSENCODER_SCORE_THRESHOLD = -2.0  # higher = stricter. Typical range: -10 to +10
+# The FAISS index is loaded lazily and cached, so we don't re-read it
+# from disk on every single clause lookup.
+_law_vector_db = None
+
+
+def _get_law_vector_db():
+    global _law_vector_db
+    if _law_vector_db is None:
+        _law_vector_db = FAISS.load_local(
+            "./faiss_db",
+            law_embeddings,
+            allow_dangerous_deserialization=True,
+        )
+    return _law_vector_db
+
+_LAW_RELEVANCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "relevant": {"type": "boolean"},
+        "excerpt_number": {"type": "integer"},
+        "reasoning": {"type": "string"},
+    },
+    "required": ["relevant", "reasoning"],
+}
 
 
 def search_indian_laws(query_text):
     print(f"Searching Archive for: '{query_text[:50]}...'")
 
-    vector_db = FAISS.load_local(
-        "./faiss_db",
-        law_embeddings,
-        allow_dangerous_deserialization=True
-    )
-
+    vector_db = _get_law_vector_db()
     candidates = vector_db.similarity_search(query_text, k=LAW_CANDIDATES_K)
     if not candidates:
         return []
@@ -507,24 +559,36 @@ def audit_pasted_text(raw_text: str = Form(...)):
 def audit_uploaded_file(file: UploadFile = File(...)):
     print(f"Drive-Thru received a file: {file.filename}")
 
-    temp_filepath = os.path.join(UPLOAD_FOLDER, file.filename)
-    with open(temp_filepath, "wb") as f:
-        f.write(file.file.read())
+    # Sanitize the filename to strip any directory components -- this
+    # prevents path-traversal attacks (e.g. "../../etc/passwd").
+    safe_name = os.path.basename(file.filename or "")
+    if not safe_name:
+        return {"error": "Invalid file name."}
 
-    name_lower = file.filename.lower()
-    if name_lower.endswith(".pdf"):
-        text_to_audit = _extract_text_from_chunks(process_pdf(temp_filepath))
-    elif name_lower.endswith((".png", ".jpg", ".jpeg")):
-        # FIX: process_image() now returns a plain string directly,
-        # so no _extract_text_from_chunks() call is needed here.
-        text_to_audit = process_image(temp_filepath)  # ✅ already a string
-    elif name_lower.endswith(".docx"):
-        text_to_audit = _extract_text_from_chunks(process_docx(temp_filepath))
-    else:
-        os.remove(temp_filepath)
-        return {"error": "Sorry, we don't cook this type of file!"}
+    temp_filepath = os.path.join(UPLOAD_FOLDER, safe_name)
+    name_lower = safe_name.lower()
 
-    os.remove(temp_filepath)
+    try:
+        with open(temp_filepath, "wb") as f:
+            f.write(file.file.read())
+
+        try:
+            if name_lower.endswith(".pdf"):
+                text_to_audit = _extract_text_from_chunks(process_pdf(temp_filepath))
+            elif name_lower.endswith((".png", ".jpg", ".jpeg")):
+                # process_image() returns a plain string directly.
+                text_to_audit = process_image(temp_filepath)
+            elif name_lower.endswith(".docx"):
+                text_to_audit = _extract_text_from_chunks(process_docx(temp_filepath))
+            else:
+                return {"error": "Sorry, we don't cook this type of file!"}
+        except Exception as e:
+            # Return a friendly JSON error instead of letting a 500 bubble up
+            return {"error": str(e)}
+    finally:
+        # Always clean up the temp file, even if processing raised.
+        if os.path.exists(temp_filepath):
+            os.remove(temp_filepath)
 
     summary_text, overall_risk = summarize_document(text_to_audit)
     findings = audit_text(text_to_audit)

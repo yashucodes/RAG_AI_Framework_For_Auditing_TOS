@@ -267,13 +267,22 @@ def run_audit(uploaded_file=None, raw_text=None):
                 timeout=BACKEND_TIMEOUT_SECONDS,
             )
 
+        # Try to parse backend response even on non-200 so we can surface
+        # helpful error messages (e.g. OCR/Tesseract missing) instead of
+        # silently falling back to local processing.
+        try:
+            result = response.json()
+        except Exception:
+            result = None
+
         if response.status_code != 200:
+            if result and isinstance(result, dict) and "error" in result:
+                return None, None, None, None, None, result["error"]
             raise requests.exceptions.RequestException(
                 f"Backend returned status {response.status_code}"
             )
 
-        result = response.json()
-        if "error" in result:
+        if result and "error" in result:
             return None, None, None, None, None, result["error"]
 
         st.caption("🌐 Audited via FastAPI backend.")
@@ -286,17 +295,22 @@ def run_audit(uploaded_file=None, raw_text=None):
         # Backend not running (or errored) -- fall back to the in-process pipeline.
         st.caption("ℹ️ Backend not reachable — running the audit locally instead.")
 
-        if uploaded_file is not None:
-            text_to_audit = _extract_text_locally(uploaded_file)
-            if text_to_audit is None:
-                return None, None, None, None, None, "Sorry, we don't support this file type."
-        else:
-            text_to_audit = raw_text
+        try:
+            if uploaded_file is not None:
+                text_to_audit = _extract_text_locally(uploaded_file)
+                if text_to_audit is None:
+                    return None, None, None, None, None, "Sorry, we don't support this file type."
+            else:
+                text_to_audit = raw_text
 
-        summary_text, overall_risk = summarize_document(text_to_audit)
-        findings = audit_text(text_to_audit)
-        risk_score, overall_risk, suggestion = calculate_risk(summary_text)
-        return summary_text, overall_risk, findings, risk_score, suggestion, None
+            summary_text, overall_risk = summarize_document(text_to_audit)
+            findings = audit_text(text_to_audit)
+            risk_score, overall_risk, suggestion = calculate_risk(summary_text)
+
+            return summary_text, overall_risk, findings, risk_score, suggestion, None
+        except Exception as e:
+            # Surface a friendly error message to the UI instead of a traceback.
+            return None, None, None, None, None, str(e)
 
 
 # ==========================================
