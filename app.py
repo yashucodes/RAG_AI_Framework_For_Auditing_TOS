@@ -9,7 +9,6 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from PIL import Image
 import pytesseract
-import shutil
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from google import genai
@@ -56,37 +55,7 @@ def _call_gemini_json(prompt, schema):
 
 
 # --- SETUP ROBOT EYES ---
-def _locate_tesseract():
-    # Allow user to override with env vars set by deployment or local dev.
-    env_checks = [os.environ.get("TESSERACT_CMD"), os.environ.get("TESSERACT_PATH")]
-    for p in env_checks:
-        if p and os.path.exists(p):
-            return p
-
-    # If tesseract is on PATH, shutil.which will find it.
-    which = shutil.which("tesseract")
-    if which:
-        return which
-
-    # Common Windows install locations
-    common = [
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-        r"C:\Tesseract-OCR\tesseract.exe",
-    ]
-    for p in common:
-        if os.path.exists(p):
-            return p
-
-    return None
-
-
-_TESSERACT_CMD = _locate_tesseract()
-if _TESSERACT_CMD:
-    pytesseract.pytesseract.tesseract_cmd = _TESSERACT_CMD
-else:
-    # Do not set tesseract_cmd; let callers handle the missing binary.
-    print("WARNING: tesseract executable not found. OCR will fail for images unless Tesseract is installed and on PATH.")
+pytesseract.pytesseract.tesseract_cmd = r'C:\Tesseract-OCR\tesseract.exe'
 
 
 # ==========================================
@@ -119,14 +88,8 @@ def process_image(file_path):
     (PDF, DOCX, image) produce the same output type for the audit pipeline.
     """
     my_picture = Image.open(file_path)
-    try:
-        raw_text = pytesseract.image_to_string(my_picture)
-        return raw_text  # ✅ plain string — consistent with PDF/DOCX after extraction
-    except pytesseract.pytesseract.TesseractNotFoundError:
-        raise RuntimeError(
-            "Tesseract OCR executable not found. Install Tesseract (https://github.com/tesseract-ocr/tesseract) "
-            "and ensure it's on your PATH, or set the TESSERACT_CMD/TESSERACT_PATH environment variable to the tesseract.exe location."
-        )
+    raw_text = pytesseract.image_to_string(my_picture)
+    return raw_text  # ✅ plain string — consistent with PDF/DOCX after extraction
 
 
 def process_docx(file_path):
@@ -572,19 +535,16 @@ def audit_uploaded_file(file: UploadFile = File(...)):
         with open(temp_filepath, "wb") as f:
             f.write(file.file.read())
 
-        try:
-            if name_lower.endswith(".pdf"):
-                text_to_audit = _extract_text_from_chunks(process_pdf(temp_filepath))
-            elif name_lower.endswith((".png", ".jpg", ".jpeg")):
-                # process_image() returns a plain string directly.
-                text_to_audit = process_image(temp_filepath)
-            elif name_lower.endswith(".docx"):
-                text_to_audit = _extract_text_from_chunks(process_docx(temp_filepath))
-            else:
-                return {"error": "Sorry, we don't cook this type of file!"}
-        except Exception as e:
-            # Return a friendly JSON error instead of letting a 500 bubble up
-            return {"error": str(e)}
+        if name_lower.endswith(".pdf"):
+            text_to_audit = _extract_text_from_chunks(process_pdf(temp_filepath))
+        elif name_lower.endswith((".png", ".jpg", ".jpeg")):
+            # FIX: process_image() now returns a plain string directly,
+            # so no _extract_text_from_chunks() call is needed here.
+            text_to_audit = process_image(temp_filepath)  # ✅ already a string
+        elif name_lower.endswith(".docx"):
+            text_to_audit = _extract_text_from_chunks(process_docx(temp_filepath))
+        else:
+            return {"error": "Sorry, we don't cook this type of file!"}
     finally:
         # Always clean up the temp file, even if processing raised.
         if os.path.exists(temp_filepath):
