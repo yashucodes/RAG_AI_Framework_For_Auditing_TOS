@@ -55,7 +55,7 @@ def _call_gemini_json(prompt, schema):
 
 
 # --- SETUP ROBOT EYES ---
-pytesseract.pytesseract.tesseract_cmd = r'C:\Tesseract-OCR\tesseract.exe'
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 
 
 # ==========================================
@@ -111,40 +111,25 @@ def process_text(raw_text):
 # ==========================================
 # 5. THE WALKIE-TALKIE (SEARCH DATABASE)
 # ==========================================
-law_embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+from sentence_transformers import CrossEncoder
 
-LAW_CANDIDATES_K = 5
+# Load once at module level so it doesn't reload on every search call
+reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
-# The FAISS index is loaded lazily and cached, so we don't re-read it
-# from disk on every single clause lookup.
-_law_vector_db = None
-
-
-def _get_law_vector_db():
-    global _law_vector_db
-    if _law_vector_db is None:
-        _law_vector_db = FAISS.load_local(
-            "./faiss_db",
-            law_embeddings,
-            allow_dangerous_deserialization=True,
-        )
-    return _law_vector_db
-
-_LAW_RELEVANCE_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "relevant": {"type": "boolean"},
-        "excerpt_number": {"type": "integer"},
-        "reasoning": {"type": "string"},
-    },
-    "required": ["relevant", "reasoning"],
-}
+# --- TUNE THESE TWO NUMBERS AFTER TESTING ---
+FAISS_DISTANCE_THRESHOLD = 1.5   # lower = stricter. FAISS L2 distance: lower = more similar
+CROSSENCODER_SCORE_THRESHOLD = -2.0  # higher = stricter. Typical range: -10 to +10
 
 
 def search_indian_laws(query_text):
     print(f"Searching Archive for: '{query_text[:50]}...'")
 
-    vector_db = _get_law_vector_db()
+    vector_db = FAISS.load_local(
+        "./faiss_db",
+        law_embeddings,
+        allow_dangerous_deserialization=True
+    )
+
     candidates = vector_db.similarity_search(query_text, k=LAW_CANDIDATES_K)
     if not candidates:
         return []
@@ -522,33 +507,24 @@ def audit_pasted_text(raw_text: str = Form(...)):
 def audit_uploaded_file(file: UploadFile = File(...)):
     print(f"Drive-Thru received a file: {file.filename}")
 
-    # Sanitize the filename to strip any directory components -- this
-    # prevents path-traversal attacks (e.g. "../../etc/passwd").
-    safe_name = os.path.basename(file.filename or "")
-    if not safe_name:
-        return {"error": "Invalid file name."}
+    temp_filepath = os.path.join(UPLOAD_FOLDER, file.filename)
+    with open(temp_filepath, "wb") as f:
+        f.write(file.file.read())
 
-    temp_filepath = os.path.join(UPLOAD_FOLDER, safe_name)
-    name_lower = safe_name.lower()
+    name_lower = file.filename.lower()
+    if name_lower.endswith(".pdf"):
+        text_to_audit = _extract_text_from_chunks(process_pdf(temp_filepath))
+    elif name_lower.endswith((".png", ".jpg", ".jpeg")):
+        # FIX: process_image() now returns a plain string directly,
+        # so no _extract_text_from_chunks() call is needed here.
+        text_to_audit = process_image(temp_filepath)  # ✅ already a string
+    elif name_lower.endswith(".docx"):
+        text_to_audit = _extract_text_from_chunks(process_docx(temp_filepath))
+    else:
+        os.remove(temp_filepath)
+        return {"error": "Sorry, we don't cook this type of file!"}
 
-    try:
-        with open(temp_filepath, "wb") as f:
-            f.write(file.file.read())
-
-        if name_lower.endswith(".pdf"):
-            text_to_audit = _extract_text_from_chunks(process_pdf(temp_filepath))
-        elif name_lower.endswith((".png", ".jpg", ".jpeg")):
-            # FIX: process_image() now returns a plain string directly,
-            # so no _extract_text_from_chunks() call is needed here.
-            text_to_audit = process_image(temp_filepath)  # ✅ already a string
-        elif name_lower.endswith(".docx"):
-            text_to_audit = _extract_text_from_chunks(process_docx(temp_filepath))
-        else:
-            return {"error": "Sorry, we don't cook this type of file!"}
-    finally:
-        # Always clean up the temp file, even if processing raised.
-        if os.path.exists(temp_filepath):
-            os.remove(temp_filepath)
+    os.remove(temp_filepath)
 
     summary_text, overall_risk = summarize_document(text_to_audit)
     findings = audit_text(text_to_audit)
