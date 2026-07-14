@@ -3,6 +3,7 @@ import streamlit as st
 import requests
 import os
 from app import process_pdf, process_image, process_docx, process_text, audit_text, summarize_document
+from risk_score import calculate_risk
 
 st.set_page_config(page_title="ToS Auditor", page_icon="⚖️")
 st.title("⚖️ Legal ToS Auditor")
@@ -57,14 +58,25 @@ def display_audit_results(findings):
     st.caption(f"Summary: {high_risk_count} high-risk clause(s), {contradiction_count} contradiction(s) found.")
 
 
-def display_summary(summary_text, overall_risk):
+def display_summary(summary_text, overall_risk, risk_score, suggestion):
+
     st.subheader("📝 What This Document Says")
+
+    text = (
+        f"**AI Risk Score:** {risk_score}/10\n\n"
+        f"**Overall Risk:** {overall_risk.capitalize()}\n\n"
+        f"{summary_text}\n\n"
+        f"💡 **Suggestion:** {suggestion}"
+    )
+
     if overall_risk == "high":
-        st.error(f"**Overall Risk: High** \n\n{summary_text}")
+        st.error(text)
+
     elif overall_risk == "medium":
-        st.warning(f"**Overall Risk: Medium** \n\n{summary_text}")
+        st.warning(text)
+
     else:
-        st.success(f"**Overall Risk: Low** \n\n{summary_text}")
+        st.success(text)
 
 
 def display_results(matching_laws):
@@ -121,9 +133,21 @@ def run_audit(uploaded_file=None, raw_text=None):
         if response.status_code == 200:
             result = response.json()
             if "error" in result:
-                return None, None, None, result["error"]
+                return None, None, None, None, None, result["error"]
             st.caption("🌐 Audited via FastAPI backend.")
-            return result.get("summary", ""), result.get("overall_risk", "medium"), result.get("findings", []), None
+            summary_text = result.get("summary", "")
+            findings = result.get("findings", [])
+
+            risk_score, overall_risk, suggestion = calculate_risk(summary_text)
+
+            return (
+                summary_text,
+                overall_risk,
+                findings,
+                risk_score,
+                suggestion,
+                None
+            )
         else:
             raise requests.exceptions.RequestException(f"Backend returned status {response.status_code}")
 
@@ -135,13 +159,23 @@ def run_audit(uploaded_file=None, raw_text=None):
         if uploaded_file is not None:
             text_to_audit = _extract_text_locally(uploaded_file)
             if text_to_audit is None:
-                return None, None, None, "Sorry, we don't support this file type."
+                return None, None, None, None, None, "Sorry, we don't support this file type."
         else:
             text_to_audit = raw_text
 
         summary_text, overall_risk = summarize_document(text_to_audit)
         findings = audit_text(text_to_audit)
-        return summary_text, overall_risk, findings, None
+
+        risk_score, overall_risk, suggestion = calculate_risk(summary_text)
+
+        return (
+            summary_text,
+            overall_risk,
+            findings,
+            risk_score,
+            suggestion,
+            None
+        )
 
 
 tab1, tab2 = st.tabs(["📁 Upload Document", "📝 Paste Text"])
@@ -163,13 +197,14 @@ with tab1:
             for uploaded_file in uploaded_files:
                 st.write(f"**Processing:** {uploaded_file.name}")
 
-                summary_text, overall_risk, findings, error = run_audit(uploaded_file=uploaded_file)
+                summary_text, overall_risk, findings, risk_score, suggestion, error = run_audit( uploaded_file=uploaded_file)
+                                                                                                
 
                 if error:
                     st.error(error)
                     continue
 
-                display_summary(summary_text, overall_risk)
+                display_summary(summary_text, overall_risk, risk_score, suggestion)
                 display_audit_results(findings)
 
 # ==========================================
@@ -184,12 +219,17 @@ with tab2:
 
     if st.button("Start Audit on Pasted Text", key="audit_paste_btn"):
         if pasted_tos.strip():
-            summary_text, overall_risk, findings, error = run_audit(raw_text=pasted_tos)
+            summary_text, overall_risk, findings, risk_score, suggestion, error = run_audit(raw_text=pasted_tos)
 
             if error:
                 st.error(error)
             else:
-                display_summary(summary_text, overall_risk)
-                display_audit_results(findings)
+               display_summary(
+                summary_text,
+                overall_risk,
+                risk_score,
+                suggestion
+            )
+               display_audit_results(findings)
         else:
             st.warning("Please paste some text before starting the audit.")
