@@ -4,6 +4,7 @@ import os
 import json
 from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
 from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -55,8 +56,7 @@ def _call_gemini_json(prompt, schema):
 
 
 # --- SETUP ROBOT EYES ---
-pytesseract.pytesseract.tesseract_cmd = r'C:\Tesseract-OCR\tesseract.exe'
-
+pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 # ==========================================
 # RECIPES (Chop the food)
@@ -478,7 +478,16 @@ def audit_text(raw_text):
 # ==========================================
 # 10. THE DRIVE-THRU WINDOWS (FastAPI)
 # ==========================================
-app = FastAPI(title="ToS Auditor Kitchen")
+app = FastAPI(title="ToS Auditor")
+
+# Enable CORS so the browser extension can talk to FastAPI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows requests from extensions and external clients
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 UPLOAD_FOLDER = "temp_uploads"
 if not os.path.exists(UPLOAD_FOLDER):

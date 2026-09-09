@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body {
+      width: 320px;
+      font-family: Arial, sans-serif;
+      padding: 12px;
+      margin: 0;
+      background-color: #f9f9fb;
+    }
+    h3 { margin-top: 0; color: #1e293b; display: flex; align-items: center; gap: 6px; }
+    button {
+      width: 100%;
+      padding: 10px;
+      background-color: #2563eb;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+    button:hover { background-color: #1d4ed8; }
+    #status { margin-top: 10px; font-size: 13px; color: #64748b; text-align: center; }
+    #results { margin-top: 12px; max-height: 300px; overflow-y: auto; }
+    .badge {
+      display: inline-block;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-weight: bold;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }
+    .badge-high { background-color: #fee2e2; color: #991b1b; }
+    .badge-medium { background-color: #fef3c7; color: #92400e; }
+    .badge-low { background-color: #dcfce7; color: #166534; }
+    .finding-card {
+      background: white;
+      border: 1px solid #e2e8f0;
+      padding: 8px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <h3>⚖️ ToS Legal Auditor</h3>
+  <button id="auditBtn">Audit Current Webpage</button>
+  <div id="status"></div>
+  <div id="results"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

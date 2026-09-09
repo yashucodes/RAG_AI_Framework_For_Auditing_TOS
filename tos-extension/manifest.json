@@ -1,0 +1,13 @@
+{
+  "manifest_version": 3,
+  "name": "ToS Legal Auditor",
+  "version": "1.0",
+  "description": "Audits Terms of Service on any webpage against Indian Laws.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
