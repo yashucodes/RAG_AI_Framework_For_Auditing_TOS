@@ -1,55 +1,60 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <style>
-    body {
-      width: 320px;
-      font-family: Arial, sans-serif;
-      padding: 12px;
-      margin: 0;
-      background-color: #f9f9fb;
-    }
-    h3 { margin-top: 0; color: #1e293b; display: flex; align-items: center; gap: 6px; }
-    button {
-      width: 100%;
-      padding: 10px;
-      background-color: #2563eb;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      font-weight: bold;
-      cursor: pointer;
-    }
-    button:hover { background-color: #1d4ed8; }
-    #status { margin-top: 10px; font-size: 13px; color: #64748b; text-align: center; }
-    #results { margin-top: 12px; max-height: 300px; overflow-y: auto; }
-    .badge {
-      display: inline-block;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-weight: bold;
-      font-size: 12px;
-      margin-bottom: 8px;
-    }
-    .badge-high { background-color: #fee2e2; color: #991b1b; }
-    .badge-medium { background-color: #fef3c7; color: #92400e; }
-    .badge-low { background-color: #dcfce7; color: #166534; }
-    .finding-card {
-      background: white;
-      border: 1px solid #e2e8f0;
-      padding: 8px;
-      border-radius: 6px;
-      margin-bottom: 8px;
-      font-size: 12px;
-    }
-  </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ToS Legal Auditor</title>
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <h3>⚖️ ToS Legal Auditor</h3>
-  <button id="auditBtn">Audit Current Webpage</button>
-  <div id="status"></div>
-  <div id="results"></div>
+  <div class="header">
+    <div class="title-row">
+      <span class="logo-icon">⚖️</span>
+      <h3>Legal ToS Auditor</h3>
+    </div>
+    <p class="subtitle">AI Legal Detective — Flags risky & contradictory clauses</p>
+  </div>
+
+  <button id="auditBtn" class="primary-btn">⚡ Audit Current Webpage</button>
+
+  <div id="status" class="status-message"></div>
+
+  <div id="results" class="results-container hidden">
+    <!-- Executive Summary Card -->
+    <div class="card summary-card">
+      <div class="gauge-wrapper">
+        <div id="scoreGauge" class="score-circle">
+          <span id="scoreText">0</span><span class="score-denom">/10</span>
+        </div>
+        <span id="riskBadge" class="badge">LOW RISK</span>
+      </div>
+      <div class="summary-content">
+        <h4>Executive Summary</h4>
+        <p id="summaryText"></p>
+
+        <div class="suggestion-box">
+          <strong>💡 Suggestion:</strong>
+          <span id="suggestionText"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Contradictions Section -->
+    <div id="contradictionsSection" class="section-container hidden">
+      <h4 class="section-title text-purple">⚡ Contradictory Clauses (<span id="contradictionCount">0</span>)</h4>
+      <div id="contradictionsList"></div>
+    </div>
+
+    <!-- Risky Clauses Section -->
+    <div id="riskySection" class="section-container hidden">
+      <h4 class="section-title text-red">⚠️ Risky & Unfair Clauses (<span id="riskyCount">0</span>)</h4>
+      <div id="riskyList"></div>
+    </div>
+
+    <div id="cleanState" class="clean-state hidden">
+      <p>✅ <strong>No risky or contradictory clauses detected!</strong></p>
+    </div>
+  </div>
 
   <script src="popup.js"></script>
 </body>
