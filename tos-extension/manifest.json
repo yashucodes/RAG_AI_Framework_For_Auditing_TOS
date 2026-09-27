@@ -5,7 +5,8 @@
   "description": "Audits Terms of Service on any webpage against Indian Laws.",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "host_permissions": [
     "http://127.0.0.1:8000/*"
