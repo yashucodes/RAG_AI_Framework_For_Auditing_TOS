@@ -9,50 +9,56 @@
 <body>
   <div class="header">
     <div class="title-row">
-      <span class="logo-icon">⚖️</span>
+      <svg width="34" height="34" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <line x1="20" y1="4" x2="20" y2="32" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+        <line x1="6" y1="10" x2="34" y2="10" stroke="#ffffff" stroke-width="2" stroke-linecap="round"/>
+        <path d="M6 10 L2 20 A6 6 0 0 0 14 20 Z" stroke="#ffffff" stroke-width="1.6" fill="none" stroke-linejoin="round"/>
+        <path d="M34 10 L30 20 A6 6 0 0 0 42 20 Z" stroke="#ffffff" stroke-width="1.6" fill="none" stroke-linejoin="round"/>
+        <rect x="12" y="32" width="16" height="3.5" rx="1.5" fill="#ffffff"/>
+        <circle cx="20" cy="6" r="2.4" fill="#ffffff"/>
+      </svg>
       <h3>Legal ToS Auditor</h3>
     </div>
-    <p class="subtitle">AI Legal Detective — Flags risky & contradictory clauses</p>
+    <p class="subtitle">Flags risky and contradictory clauses against Indian law</p>
   </div>
 
-  <button id="auditBtn" class="primary-btn">⚡ Audit Current Webpage</button>
+  <button id="auditBtn" class="primary-btn">Audit Current Webpage</button>
 
   <div id="status" class="status-message"></div>
 
   <div id="results" class="results-container hidden">
-    <!-- Executive Summary Card -->
     <div class="card summary-card">
       <div class="gauge-wrapper">
-        <div id="scoreGauge" class="score-circle">
-          <span id="scoreText">0</span><span class="score-denom">/10</span>
+        <div id="scoreGauge" class="gauge">
+          <div class="gauge-inner">
+            <span id="scoreText">0</span><span class="score-denom">/10</span>
+          </div>
         </div>
         <span id="riskBadge" class="badge">LOW RISK</span>
       </div>
       <div class="summary-content">
-        <h4>Executive Summary</h4>
+        <h4>Audit Overview</h4>
         <p id="summaryText"></p>
 
         <div class="suggestion-box">
-          <strong>💡 Suggestion:</strong>
+          <strong>Suggestion:</strong>
           <span id="suggestionText"></span>
         </div>
       </div>
     </div>
 
-    <!-- Contradictions Section -->
     <div id="contradictionsSection" class="section-container hidden">
-      <h4 class="section-title text-purple">⚡ Contradictory Clauses (<span id="contradictionCount">0</span>)</h4>
+      <h4 class="section-title text-amber">Contradictory Clauses (<span id="contradictionCount">0</span>)</h4>
       <div id="contradictionsList"></div>
     </div>
 
-    <!-- Risky Clauses Section -->
     <div id="riskySection" class="section-container hidden">
-      <h4 class="section-title text-red">⚠️ Risky & Unfair Clauses (<span id="riskyCount">0</span>)</h4>
+      <h4 class="section-title text-red">Risky and Unfair Clauses (<span id="riskyCount">0</span>)</h4>
       <div id="riskyList"></div>
     </div>
 
     <div id="cleanState" class="clean-state hidden">
-      <p>✅ <strong>No risky or contradictory clauses detected!</strong></p>
+      <p><strong>No risky or contradictory clauses detected.</strong></p>
     </div>
   </div>
 

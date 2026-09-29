@@ -79,7 +79,7 @@ document.getElementById("auditBtn").addEventListener("click", async () => {
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.id) {
-      statusDiv.innerText = "⚠️ Unable to query current active tab.";
+      statusDiv.innerText = "Unable to query the current active tab.";
       return;
     }
 
@@ -90,18 +90,18 @@ document.getElementById("auditBtn").addEventListener("click", async () => {
         files: ["content.js"],
       });
     } catch (e) {
-      statusDiv.innerText = "⚠️ Cannot run on browser system pages.";
+      statusDiv.innerText = "Cannot run on browser system pages.";
       return;
     }
 
     // Request DOM content
     chrome.tabs.sendMessage(tab.id, { action: "extract_text" }, async (response) => {
       if (chrome.runtime.lastError || !response || !response.text) {
-        statusDiv.innerText = "⚠️ Could not extract text from this page.";
+        statusDiv.innerText = "Could not extract text from this page.";
         return;
       }
 
-      statusDiv.innerText = "🔍 Analyzing risk scores & contradictions...";
+      statusDiv.innerText = "Analyzing risk scores and contradictions...";
 
       try {
         const formData = new FormData();
@@ -122,18 +122,30 @@ document.getElementById("auditBtn").addEventListener("click", async () => {
         await saveCache(tab, data);
       } catch (err) {
         console.error(err);
-        statusDiv.innerText = "❌ Error reaching backend. Verify Uvicorn is running!";
+        statusDiv.innerText = "Error reaching backend. Verify Uvicorn is running.";
       }
     });
   } catch (err) {
     console.error(err);
-    statusDiv.innerText = "❌ Unexpected error occurred.";
+    statusDiv.innerText = "Unexpected error occurred.";
   }
 });
 
+// Escape anything that came from the audited webpage or the model before it
+// goes into innerHTML. The extension reads arbitrary pages, so clause text
+// must never be trusted as markup.
+function esc(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function renderResults(data) {
   const resultsDiv = document.getElementById("results");
-  const scoreCircle = document.getElementById("scoreGauge");
+  const scoreGauge = document.getElementById("scoreGauge");
   const scoreText = document.getElementById("scoreText");
   const riskBadge = document.getElementById("riskBadge");
   const summaryText = document.getElementById("summaryText");
@@ -146,35 +158,32 @@ function renderResults(data) {
   const riskyCount = document.getElementById("riskyCount");
   const cleanState = document.getElementById("cleanState");
 
-  // 1. Render Risk Gauge & Summary
-  const score = data.risk_score || 0;
-  const riskLevel = (data.risk_level || "LOW").toUpperCase();
+  // 1. Risk gauge + overview
+  const score = Number(data.risk_score) || 0;
+  const riskLevel = String(data.risk_level || "LOW").toUpperCase();
 
   scoreText.innerText = score;
   riskBadge.innerText = `${riskLevel} RISK`;
-
-  // Style Gauge Border Color based on Risk
-  scoreCircle.className = "score-circle";
   riskBadge.className = "badge";
 
-  if (riskLevel === "HIGH" || score >= 7) {
-    scoreCircle.style.borderColor = "#ef4444";
-    scoreCircle.style.backgroundColor = "#fef2f2";
-    riskBadge.classList.add("badge-high");
-  } else if (riskLevel === "MEDIUM" || score >= 4) {
-    scoreCircle.style.borderColor = "#eab308";
-    scoreCircle.style.backgroundColor = "#fefce8";
-    riskBadge.classList.add("badge-medium");
-  } else {
-    scoreCircle.style.borderColor = "#22c55e";
-    scoreCircle.style.backgroundColor = "#f0fdf4";
-    riskBadge.classList.add("badge-low");
+  let color = "#22c55e";
+  let badgeClass = "badge-low";
+  if (riskLevel === "HIGH") {
+    color = "#ef4444";
+    badgeClass = "badge-high";
+  } else if (riskLevel === "MEDIUM") {
+    color = "#f59e0b";
+    badgeClass = "badge-medium";
   }
+  riskBadge.classList.add(badgeClass);
 
-  summaryText.innerText = data.summary || "No summary provided.";
-  suggestionText.innerText = data.suggestion || "Review agreement carefully before accepting.";
+  const pct = Math.max(0, Math.min(score * 10, 100));
+  scoreGauge.style.background = `conic-gradient(${color} ${pct}%, #2a2a2e 0)`;
 
-  // 2. Render Contradictions
+  summaryText.innerText = data.summary || "No overview provided.";
+  suggestionText.innerText = data.suggestion || "Review the agreement carefully before accepting.";
+
+  // 2. Contradictions
   const contradictions = data.contradictions || [];
   contradictionsList.innerHTML = "";
 
@@ -186,10 +195,10 @@ function renderResults(data) {
       const card = document.createElement("div");
       card.className = "clause-card contradiction-card";
       card.innerHTML = `
-        <strong>Conflict Found:</strong>
-        <span class="clause-quote">Clause A: "${c.clause_1}"</span>
-        <span class="clause-quote">Clause B: "${c.clause_2}"</span>
-        <div class="contradiction-explanation"><strong>Contradiction:</strong> ${c.explanation}</div>
+        <strong>Conflict Found</strong>
+        <span class="clause-quote">Clause A: "${esc(c.clause_1)}"</span>
+        <span class="clause-quote">Clause B: "${esc(c.clause_2)}"</span>
+        <div class="contradiction-explanation">${esc(c.explanation)}</div>
       `;
       contradictionsList.appendChild(card);
     });
@@ -197,7 +206,7 @@ function renderResults(data) {
     contradictionsSection.classList.add("hidden");
   }
 
-  // 3. Render Risky Clauses
+  // 3. Risky clauses
   const riskyClauses = data.risky_clauses || [];
   riskyList.innerHTML = "";
 
@@ -206,13 +215,14 @@ function renderResults(data) {
     riskySection.classList.remove("hidden");
 
     riskyClauses.forEach((r) => {
+      const label = String(r.category || "Risky Clause").replace(/_/g, " ");
       const card = document.createElement("div");
       card.className = "clause-card";
       card.innerHTML = `
-        <strong>${r.category || "Risky Clause"}</strong>
-        <span class="clause-quote">"${r.clause_text}"</span>
-        <div class="explanation">${r.explanation}</div>
-        ${r.legal_citation ? `<small style="color:#64748b;">Law: ${r.legal_citation}</small>` : ""}
+        <strong>${esc(label)}</strong>
+        <span class="clause-quote">"${esc(r.clause_text)}"</span>
+        <div class="explanation">${esc(r.explanation)}</div>
+        ${r.legal_citation ? `<small class="law-tag">Law: ${esc(r.legal_citation)}</small>` : ""}
       `;
       riskyList.appendChild(card);
     });
@@ -220,7 +230,7 @@ function renderResults(data) {
     riskySection.classList.add("hidden");
   }
 
-  // 4. Clean state check
+  // 4. Clean state
   if (contradictions.length === 0 && riskyClauses.length === 0) {
     cleanState.classList.remove("hidden");
   } else {
